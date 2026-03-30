@@ -22,7 +22,6 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
-        // המפתחות האמיתיים והנקיים שלך
         const firebaseConfig = {
           apiKey: "AIzaSyCuVJfd5mj7zoVxlDZoVNgan-aP1mcXuHE",
           authDomain: "studioshalem-eca37.firebaseapp.com",
@@ -38,7 +37,6 @@
         const auth = firebase.auth();
 
         const LOGO_SRC = "images/LOGO1.png"; 
-        // סיסמה גלובלית נסתרת כדי שפיירבייס יאפשר התחברות רק עם מייל
         const MAGIC_PASSWORD = "StudioShalem2026!!!"; 
 
         const App = () => {
@@ -58,8 +56,7 @@
             const [manualHours, setManualHours] = useState([]);
             const [wheelDescriptions, setWheelDescriptions] = useState({});
             
-            const [selectedWheelInfo, setSelectedWheelInfo] = useState(null);
-            const [showNameModal, setShowNameModal] = useState(false);
+            const [allStudents, setAllStudents] = useState([]);
 
             useEffect(() => {
                 const unsubscribeAuth = auth.onAuthStateChanged((user) => {
@@ -95,6 +92,17 @@
                 };
             }, []);
 
+            // מושך את רשימת כל התלמידים למנהל עבור ההשלמה האוטומטית
+            useEffect(() => {
+                if (isAdmin) {
+                    const unsub = db.collection('profiles').onSnapshot(snap => {
+                        const names = snap.docs.map(doc => doc.data().full_name).filter(Boolean);
+                        setAllStudents(names);
+                    });
+                    return () => unsub();
+                }
+            }, [isAdmin]);
+
             const fetchProfile = async (userId) => {
                 try {
                     const docSnap = await db.collection('profiles').doc(userId).get();
@@ -127,7 +135,6 @@
                 if (!email || email.trim() === "") return alert("חובה להזין אימייל");
                 setLoading(true);
                 try {
-                    // יוצר משתמש עם הסיסמה הנסתרת שלנו
                     const userCredential = await auth.createUserWithEmailAndPassword(email.trim(), MAGIC_PASSWORD);
                     const user = userCredential.user;
                     await db.collection('profiles').doc(user.uid).set({
@@ -147,7 +154,6 @@
                 if (!email || email.trim() === "") return alert("חובה להזין אימייל");
                 setLoading(true);
                 try { 
-                    // מתחבר באמצעות הסיסמה הנסתרת
                     await auth.signInWithEmailAndPassword(email.trim(), MAGIC_PASSWORD); 
                 } 
                 catch (error) { 
@@ -184,6 +190,11 @@
                 e.preventDefault();
                 const d = e.target.d.value;
                 const t = e.target.t.value;
+                
+                // התיקון לבעיית התאריך: במקום חסימת דפדפן שקטה, הודעה ברורה
+                if (!d) return alert("שים לב: חובה לבחור תאריך מדויק מהיומן (כולל שנה).");
+                if (!t) return alert("יש להזין שעת התחלה וסיום.");
+
                 const type = activeTab;
                 const assignments = {};
                 if (type === 'guided' || type === 'open') {
@@ -194,8 +205,12 @@
                 }
                 try {
                     await db.collection('open_studio').add({ slot_date: d, start_time: t, lesson_type: type, wheel_assignments: assignments });
+                    alert("השיעור פורסם בהצלחה בלוח!");
                     e.target.reset();
-                } catch (error) { console.error("Error:", error); }
+                } catch (error) { 
+                    console.error("Error:", error); 
+                    alert("שגיאה. האם עדכנת את הגדרות ה-Rules בפיירבייס כפי שהסברתי?");
+                }
             };
 
             const bookWheel = async (slotId, wheelId) => {
@@ -322,7 +337,6 @@
                 return grouped;
             }, [slots, manualHours, isAdmin]);
 
-            // --- UI RENDER: LOGIN / SIGNUP ---
             if (!session && !isAdmin) {
                 return (
                     <div className="login-wrapper">
@@ -384,6 +398,12 @@
 
             return (
                 <div className="max-w-lg mx-auto min-h-screen flex flex-col relative text-right bg-[url('https://www.transparenttextures.com/patterns/cream-paper.png')] pb-28">
+                    
+                    {/* המאגר ששומר את כל שמות התלמידים להשלמה אוטומטית */}
+                    <datalist id="students-list">
+                        {allStudents.map((name, idx) => <option key={idx} value={name} />)}
+                    </datalist>
+
                     {/* Header */}
                     <header className="px-6 pt-8 pb-4 flex justify-between items-center">
                         <div>
@@ -402,12 +422,14 @@
                             <section className="card-premium p-6">
                                 <h3 className="font-display text-xl font-bold text-[#5C3D28] mb-4 text-center">פתיחת מועד {activeTab === 'guided' ? 'שיעור' : 'פתוח'}</h3>
                                 <form onSubmit={handleAddSlot} className="space-y-3">
-                                    <input type="date" name="d" required className="clay-input" />
-                                    <input type="text" name="t" placeholder="שעה (למשל: 10:00-13:00)" required className="clay-input" />
+                                    {/* הסרנו פה את ה-required כדי שלא יחסום אותך שקוף, אלא ייתן התראה יפה */}
+                                    <input type="date" name="d" className="clay-input" />
+                                    <input type="text" name="t" placeholder="שעה (למשל: 10:00-13:00)" className="clay-input" />
                                     <div className="pt-4 mt-2 border-t border-[#FFF9F0]">
                                         <p className="text-xs text-[#9B9185] mb-2 font-semibold">שיבוץ ישיר מראש (אופציונלי):</p>
                                         <div className="grid grid-cols-2 gap-2">
-                                            {[1,2,3,4,5].map(n => <input key={n} name={`w${n}`} placeholder={`עמדה ${n}`} className="clay-input text-sm py-2" />)}
+                                            {/* פה נמצאת ההשלמה האוטומטית מתוך רשימת התלמידים */}
+                                            {[1,2,3,4,5].map(n => <input key={n} name={`w${n}`} list="students-list" autoComplete="off" placeholder={`עמדה ${n}`} className="clay-input text-sm py-2" />)}
                                         </div>
                                     </div>
                                     <button type="submit" className="w-full btn-primary mt-2">פרסם בלוח</button>
@@ -566,45 +588,4 @@
                     </nav>
 
                     {/* Modals */}
-                    {selectedWheelInfo && (
-                        <div className="modal-overlay" onClick={() => setSelectedWheelInfo(null)}>
-                            <div className="bg-[#FAF7F2] w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl text-center relative border border-white" onClick={e => e.stopPropagation()}>
-                                <h3 className="font-display text-[#5C3D28] text-3xl font-bold mb-2">עמדה {selectedWheelInfo.wId}</h3>
-                                {isAdmin && <p className="text-xs text-[#C17B4A] mb-4 font-bold tracking-widest uppercase">ניהול עמדה</p>}
-                                <p className="text-[#9B9185] mb-8 font-medium leading-relaxed bg-white p-4 rounded-2xl shadow-sm">
-                                    {wheelDescriptions[selectedWheelInfo.wId.toString()] || 'אובניים חשמליים'}
-                                </p>
-                                <div className="space-y-4">
-                                    {(!selectedWheelInfo.slot.wheel_assignments?.[selectedWheelInfo.wId] || isAdmin) ? (
-                                        <button onClick={() => bookWheel(selectedWheelInfo.slot.id, selectedWheelInfo.wId)} className="w-full btn-primary">
-                                            {isAdmin ? (selectedWheelInfo.slot.wheel_assignments?.[selectedWheelInfo.wId] ? 'שינוי שיבוץ' : 'שיבוץ ידני') : 'אני רוצה את העמדה הזו'}
-                                        </button>
-                                    ) : <p className="font-bold py-3 text-[#5C3D28] bg-white rounded-xl">תפוס ע"י {selectedWheelInfo.slot.wheel_assignments[selectedWheelInfo.wId]}</p>}
-                                    <button onClick={() => setSelectedWheelInfo(null)} className="w-full text-[#9B9185] font-bold py-2 mt-2">חזרה</button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {showNameModal && (
-                        <div className="modal-overlay">
-                            <div className="bg-[#FAF7F2] w-full max-w-xs rounded-[2.5rem] p-8 shadow-2xl text-center relative border border-white">
-                                {profile?.full_name && <button onClick={() => setShowNameModal(false)} className="absolute top-5 left-5 text-[#9B9185] text-xl">✕</button>}
-                                <h3 className="font-display text-2xl font-bold mb-2 text-[#5C3D28]">איך קוראים לך?</h3>
-                                <p className="text-sm text-[#9B9185] mb-6 font-medium">כך תופיע בלוח השיבוצים בסטודיו</p>
-                                <form onSubmit={(e) => { e.preventDefault(); handleSaveName(e.target.name.value); }}>
-                                    <input name="name" defaultValue={profile?.full_name} placeholder="השם שלך" className="clay-input text-center mb-6 font-bold text-lg shadow-sm" autoFocus />
-                                    <button type="submit" className="w-full btn-primary">שמירה</button>
-                                </form>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            );
-        };
-
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
-</body>
-</html>
+                    {selected
