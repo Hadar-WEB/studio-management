@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Studio Clay - Firebase Edition</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;600;700&display=swap');
+        body { font-family: 'Assistant', sans-serif; background-color: #fbf9f7; color: #1c1917; }
+        .tab-active { color: #ea580c; border-bottom: 4px solid #ea580c; font-weight: 800; }
+        .card { background: white; border-radius: 24px; border: 1px solid #e7e5e4; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+        .modal-overlay { background: rgba(0,0,0,0.6); backdrop-filter: blur(5px); position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 20px; }
+        .clay-input { width: 100%; padding: 12px; border: 1px solid #e7e5e4; border-radius: 12px; background: #fff; font-size: 14px; }
+        .logo-header { height: 32px; width: auto; max-width: 120px; object-fit: contain; }
+        .report-table { width: 100%; font-size: 12px; border-collapse: collapse; margin-bottom: 20px; }
+        .report-table th { text-align: right; padding: 8px; background: #f5f5f4; color: #57534e; font-weight: bold; border-bottom: 2px solid #e7e5e4; }
+        .report-table td { padding: 8px; border-bottom: 1px solid #f5f5f4; vertical-align: middle; }
+        .hours-input { width: 50px; text-align: center; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 4px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // ═══════════ FIREBASE CONFIGURATION ═══════════
+        const firebaseConfig = {
+            apiKey:"AIzaSyCqi32tyPHflqnqvTZfBPf_SPqQdvKrq_A",
+            authDomain:"studioshalem-ba925.firebaseapp.com",
+            projectId:"studioshalem-ba925",
+            storageBucket:"studioshalem-ba925.firebasestorage.app",
+            messagingSenderId:"488962069403",
+            appId:"1:488962069403:web:83e7eb50756cf40436873e"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        const auth = firebase.auth();
+
+        const LOGO_BASE64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="; 
+
+        const App = () => {
+            const [session, setSession] = useState(null);
+            const [profile, setProfile] = useState(null); 
+            const [isAdmin, setIsAdmin] = useState(localStorage.getItem('is_admin') === 'true');
+            
+            const [authMode, setAuthMode] = useState('login'); 
+            const [loading, setLoading] = useState(false);
+            const [showPassword, setShowPassword] = useState(false);
+            const [resetCode, setResetCode] = useState(null);
+            
+            const [activeTab, setActiveTab] = useState('guided');
+            const [historyView, setHistoryView] = useState('list');
+            
+            const [slots, setSlots] = useState([]);
+            const [swaps, setSwaps] = useState([]);
+            const [waitlist, setWaitlist] = useState([]);
+            const [manualHours, setManualHours] = useState([]);
+            const [wheelDescriptions, setWheelDescriptions] = useState({});
+            
+            const [selectedWheelInfo, setSelectedWheelInfo] = useState(null);
+            const [showNameModal, setShowNameModal] = useState(false);
+
+            useEffect(() => {
+                const urlParams = new URLSearchParams(window.location.search);
+                const mode = urlParams.get('mode');
+                const actionCode = urlParams.get('oobCode');
+                if (mode === 'resetPassword' && actionCode) {
+                    setAuthMode('reset');
+                    setResetCode(actionCode);
+                }
+
+                const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+                    setSession(user ? { user: { id: user.uid, email: user.email } } : null);
+                    if (user) {
+                        fetchProfile(user.uid);
+                    } else {
+                        setProfile(null);
+                        setSlots([]);
+                    }
+                });
+
+                const unsubscribeSlots = db.collection('open_studio')
+                    .orderBy('slot_date')
+                    .onSnapshot(snapshot => {
+                        const slotsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setSlots(slotsData);
+                    });
+
+                const unsubscribeSwaps = db.collection('swap_market')
+                    .orderBy('created_at', 'desc')
+                    .onSnapshot(snapshot => {
+                        const swapsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setSwaps(swapsData);
+                    });
+
+                fetchData();
+
+                return () => {
+                    unsubscribeAuth();
+                    unsubscribeSlots();
+                    unsubscribeSwaps();
+                };
+            }, []);
+
+            const fetchProfile = async (userId) => {
+                try {
+                    const docSnap = await db.collection('profiles').doc(userId).get();
+                    if (docSnap.exists && docSnap.data().full_name) {
+                        setProfile(docSnap.data());
+                    } else {
+                        setProfile({ id: userId, email: auth.currentUser?.email, full_name: "" });
+                        setShowNameModal(true);
+                    }
+                } catch (error) {
+                    console.error("Error fetching profile:", error);
+                }
+            };
+
+            const fetchData = async () => {
+                try {
+                    const waitSnap = await db.collection('waitlist').get();
+                    setWaitlist(waitSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+                    const hoursSnap = await db.collection('open_studio_hours').get();
+                    setManualHours(hoursSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+                    const infoSnap = await db.collection('wheel_info').get();
+                    const d = {}; 
+                    infoSnap.forEach(doc => { d[doc.id] = doc.data().description; });
+                    setWheelDescriptions(d);
+                } catch (error) {
+                    console.error("Error fetching additional data:", error);
+                }
+            };
+
+            const handleSignUp = async (name, email, password) => {
+                if (!name || name.trim() === "") return alert("חובה להזין שם מלא");
+                setLoading(true);
+                try {
+                    const userCredential = await auth.createUserWithEmailAndPassword(email, password);
+                    const user = userCredential.user;
+                    await db.collection('profiles').doc(user.uid).set({
+                        id: user.uid,
+                        email: email,
+                        full_name: name,
+                        created_at: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    alert(`ברוכים הבאים, ${name}!`);
+                } catch (error) {
+                    alert("שגיאה בהרשמה: " + error.message);
+                }
+                setLoading(false);
+            };
+
+            const handleSignIn = async (email, password) => {
+                setLoading(true);
+                try {
+                    await auth.signInWithEmailAndPassword(email, password);
+                } catch (error) {
+                    alert("שגיאה בהתחברות: פרטים שגויים.");
+                }
+                setLoading(false);
+            };
+
+            const handleForgotPassword = async (email) => {
+                setLoading(true);
+                try {
+                    await auth.sendPasswordResetEmail(email);
+                    alert("נשלח קישור לאיפוס סיסמה למייל.");
+                    setAuthMode('login');
+                } catch (error) {
+                    alert("שגיאה: " + error.message);
+                }
+                setLoading(false);
+            };
+
+            const handleUpdatePassword = async (newPassword) => {
+                if (!resetCode) return alert("קוד איפוס חסר.");
+                setLoading(true);
+                try {
+                    await auth.confirmPasswordReset(resetCode, newPassword);
+                    alert("הסיסמה עודכנה בהצלחה! כעת תועבר למערכת."); 
+                    setAuthMode('login'); 
+                    window.location.search = ''; 
+                } catch (error) {
+                    alert("שגיאה בעדכון הסיסמה: " + error.message);
+                }
+                setLoading(false);
+            };
+
+            const handleLogout = async () => {
+                await auth.signOut();
+                localStorage.removeItem('is_admin');
+                setIsAdmin(false);
+                setProfile(null); setSession(null); setAuthMode('login');
+                window.location.reload();
+            };
+
+            const handleSaveName = async (newName) => {
+                if (!newName || newName.trim() === "") return alert("חייב להזין שם");
+                const user = auth.currentUser;
+                if (!user) return;
+                try {
+                    await db.collection('profiles').doc(user.uid).set({
+                        id: user.uid,
+                        email: user.email,
+                        full_name: newName,
+                        updated_at: firebase.firestore.FieldValue.serverTimestamp()
+                    }, { merge: true });
+                    setProfile({ ...profile, full_name: newName }); 
+                    setShowNameModal(false);
+                } catch (error) {
+                    alert(error.message);
+                }
+            };
+
+            const toggleAdmin = () => {
+                if (isAdmin) { handleLogout(); } 
+                else { const p = prompt("קוד מנהל:"); if (p === "1234") { setIsAdmin(true); localStorage.setItem('is_admin', 'true'); } }
+            };
+
+            const handleAddSlot = async (e) => {
+                e.preventDefault();
+                const d = e.target.d.value;
+                const t = e.target.t.value;
+                const type = activeTab;
+                const assignments = {};
+                if (type === 'guided' || type === 'open') {
+                     for(let i=1; i<=5; i++) {
+                        const name = e.target[`w${i}`] ? e.target[`w${i}`].value.trim() : "";
+                        if (name) assignments[i.toString()] = name;
+                    }
+                }
+                try {
+                    await db.collection('open_studio').add({ 
+                        slot_date: d, 
+                        start_time: t, 
+                        lesson_type: type, 
+                        wheel_assignments: assignments 
+                    });
+                    alert("פורסם!"); 
+                    e.target.reset();
+                } catch (error) {
+                    console.error("Error adding slot:", error);
+                }
+            };
+
+            const bookWheel = async (slotId, wheelId) => {
+                if (!profile && !isAdmin) return alert("חסר פרופיל");
+                const slot = slots.find(s => s.id === slotId);
+                let nameToBook = profile?.full_name;
+
+                if (isAdmin) {
+                    const current = slot.wheel_assignments?.[wheelId] || "";
+                    nameToBook = prompt("מנהל - הזן שם (או ריק למחיקה):", current);
+                    if (nameToBook === null) return;
+                    if (nameToBook.trim() === "") { 
+                        const upd = { ...slot.wheel_assignments }; delete upd[wheelId];
+                        await db.collection('open_studio').doc(slotId).update({ wheel_assignments: upd });
+                        setSelectedWheelInfo(null); return;
+                    }
+                }
+
+                if (Object.values(slot.wheel_assignments || {}).includes(nameToBook) && !isAdmin) {
+                    return alert("שגיאה: התלמיד כבר רשום.");
+                }
+
+                const upd = { ...slot.wheel_assignments, [wheelId]: nameToBook };
+                await db.collection('open_studio').doc(slotId).update({ wheel_assignments: upd });
+                
+                if (!isAdmin && confirm("נרשמת! להוסיף ליומן?")) addToCalendar(slot.slot_date, slot.start_time);
+                setSelectedWheelInfo(null);
+            };
+
+            const handleCancel = async (slot, wheelId) => {
+                const startTime = slot.start_time.split('-')[0].trim();
+                const diff = (new Date(`${slot.slot_date}T${startTime}`) - new Date()) / (1000 * 60 * 60);
+
+                if (!isAdmin && diff < 48) {
+                    if (confirm("פחות מ-48 שעות. לפרסם בקהילה?")) {
+                        await db.collection('swap_market').add({
+                            original_student: profile.full_name, 
+                            original_user_id: session.user.id,
+                            slot_id: slot.id, 
+                            wheel_id: wheelId, 
+                            slot_date: slot.slot_date, 
+                            start_time: slot.start_time,
+                            created_at: firebase.firestore.FieldValue.serverTimestamp()
+                        });
+                        alert("הבקשה פורסמה!"); setActiveTab('community');
+                    }
+                    return;
+                }
+
+                if (confirm(isAdmin ? "למחוק את התלמיד?" : "למחוק רישום?")) {
+                    const upd = { ...slot.wheel_assignments }; delete upd[wheelId];
+                    await db.collection('open_studio').doc(slot.id).update({ wheel_assignments: upd });
+                }
+            };
+
+            const handleDeleteSlot = async (slotId) => {
+                if(confirm("למחוק את כל השיעור?")) {
+                    await db.collection('open_studio').doc(slotId).delete();
+                }
+            };
+
+            const handleManagerCancelSwap = async (swapItem) => {
+                if(!confirm(`האם לאשר ביטול ל-${swapItem.original_student}?`)) return;
+                const slotDoc = await db.collection('open_studio').doc(swapItem.slot_id).get();
+                if (slotDoc.exists) {
+                    const assignments = { ...slotDoc.data().wheel_assignments };
+                    delete assignments[swapItem.wheel_id];
+                    await db.collection('open_studio').doc(swapItem.slot_id).update({ wheel_assignments: assignments });
+                }
+                await db.collection('swap_market').doc(swapItem.id).delete();
+                alert("הביטול אושר.");
+            };
+
+            const executeSwap = async (swapItem) => {
+                if (swapItem.original_student === profile.full_name) return alert("לא ניתן להחליף עצמך.");
+                if (!confirm(`להחליף את ${swapItem.original_student}?`)) return;
+
+                const slotDoc = await db.collection('open_studio').doc(swapItem.slot_id).get();
+                if (!slotDoc.exists) return alert("השיעור לא קיים");
+                
+                const slotData = slotDoc.data();
+                if (slotData.wheel_assignments[swapItem.wheel_id] !== swapItem.original_student) {
+                    alert("המקום השתנה."); await db.collection('swap_market').doc(swapItem.id).delete(); return;
+                }
+
+                const assignments = { ...slotData.wheel_assignments };
+                assignments[swapItem.wheel_id] = profile.full_name;
+                await db.collection('open_studio').doc(swapItem.slot_id).update({ wheel_assignments: assignments });
+                await db.collection('swap_market').doc(swapItem.id).delete();
+                alert("בוצעה החלפה!");
+            };
+
+            const joinWaitlist = async (slotId) => {
+                await db.collection('waitlist').add({ 
+                    slot_id: slotId, 
+                    user_id: session.user.id, 
+                    email: session.user.email,
+                    created_at: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                alert("נוספת להמתנה!");
+            };
+
+            const addToCalendar = (date, time) => {
+                const [startH, endH] = time.split('-').map(t => t.trim());
+                const startDate = new Date(`${date}T${startH}`).toISOString().replace(/-|:|\.\d\d\d/g, "");
+                const endDate = new Date(`${date}T${endH}`).toISOString().replace(/-|:|\.\d\d\d/g, "");
+                window.open(`https://www.google.com/calendar/render?action=TEMPLATE&text=שיעור קדרות&dates=${startDate}/${endDate}&details=סטודיו&location=סטודיו`, '_blank');
+            };
+
+            const handleHoursChange = async (studentName, monthKey, hours) => {
+                const docId = `${studentName}_${monthKey}`.replace(/\s+/g, '_');
+                await db.collection('open_studio_hours').doc(docId).set({
+                    student_name: studentName, 
+                    month_key: monthKey, 
+                    hours: hours,
+                    updated_at: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+            };
+
+            const reportByMonth = useMemo(() => {
+                if (!isAdmin) return {};
+                const grouped = {};
+                slots.forEach(slot => {
+                    const date = new Date(slot.slot_date);
+                    const monthKey = date.toLocaleString('he-IL', { month: 'long', year: 'numeric' });
+                    const assignments = Object.values(slot.wheel_assignments || {});
+                    if (!grouped[monthKey]) grouped[monthKey] = {};
+                    assignments.forEach(studentName => {
+                        if(!grouped[monthKey][studentName]) grouped[monthKey][studentName] = { guided: 0, open_count: 0 };
+                        if (slot.lesson_type === 'guided') grouped[monthKey][studentName].guided++;
+                        else grouped[monthKey][studentName].open_count++;
+                    });
+                });
+                manualHours.forEach(record => {
+                    if (grouped[record.month_key] && grouped[record.month_key][record.student_name]) {
+                        grouped[record.month_key][record.student_name].manual_hours = record.hours;
+                    } else {
+                        if (!grouped[record.month_key]) grouped[record.month_key] = {};
+                        if (!grouped[record.month_key][record.student_name]) grouped[record.month_key][record.student_name] = { guided: 0, open_count: 0 };
+                        grouped[record.month_key][record.student_name].manual_hours = record.hours;
+                    }
+                });
+                return grouped;
+            }, [slots, manualHours, isAdmin]);
+
+            // --- UI ---
+            if ((!session && !isAdmin) || authMode === 'reset') {
+                return (
+                    <div className="h-screen flex flex-col items-center justify-center bg-[#fbf9f7] p-10">
+                        <img src={LOGO_BASE64} className="h-16 mb-6 mx-auto object-contain" alt="Logo" />
+                        <h1 className="text-stone-800 text-3xl font-bold mb-4">
+                            {authMode === 'login' && 'כניסה למערכת'}
+                            {authMode === 'signup' && 'הרשמה לסטודיו'}
+                            {authMode === 'forgot' && 'שחזור סיסמה'}
+                            {authMode === 'reset' && 'קביעת סיסמה חדשה'}
+                        </h1>
+                        <form onSubmit={(e) => { 
+                            e.preventDefault(); 
+                            const email = e.target.email ? e.target.email.value : null;
+                            const password = e.target.password ? e.target.password.value : null;
+                            if (authMode === 'signup') handleSignUp(e.target.name.value, email, password);
+                            else if (authMode === 'login') handleSignIn(email, password);
+                            else if (authMode === 'forgot') handleForgotPassword(email);
+                            else if (authMode === 'reset') handleUpdatePassword(password);
+                        }} className="w-full max-w-xs space-y-4">
+                            {authMode === 'signup' && <input type="text" name="name" placeholder="שם מלא" required className="clay-input text-center" />}
+                            {authMode !== 'reset' && <input type="email" name="email" placeholder="אימייל" required className="clay-input text-center" />}
+                            {authMode !== 'forgot' && (
+                                <div className="relative w-full">
+                                    <input type={showPassword ? "text" : "password"} name="password" placeholder={authMode === 'reset' ? "סיסמה חדשה" : "סיסמה"} required className="clay-input text-center w-full" minLength="6" />
+                                    <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute left-4 top-1/2 -translate-y-1/2 text-stone-400 text-xl hover:text-stone-600">{showPassword ? "🙈" : "👁️"}</button>
+                                </div>
+                            )}
+                            <button type="submit" disabled={loading} className="w-full bg-stone-800 text-white py-4 rounded-2xl font-bold shadow-xl">
+                                {loading ? 'מעבד...' : (authMode === 'login' ? 'התחבר' : authMode === 'signup' ? 'צור חשבון' : authMode === 'forgot' ? 'שלח לי קישור' : 'עדכן סיסמה')}
+                            </button>
+                        </form>
+                        <div className="mt-6 text-center space-y-2 flex flex-col text-sm">
+                            {authMode === 'login' && <><button onClick={() => setAuthMode('signup')} className="text-stone-500 underline">אין לך חשבון? הירשם כאן</button><button onClick={() => setAuthMode('forgot')} className="text-stone-400">שכחתי סיסמה</button></>}
+                            {authMode === 'signup' && <button onClick={() => setAuthMode('login')} className="text-stone-500 underline">יש לך חשבון? התחבר</button>}
+                            {authMode === 'forgot' && <button onClick={() => setAuthMode('login')} className="text-stone-500 underline">חזרה להתחברות</button>}
+                        </div>
+                        {authMode === 'login' && <button onClick={toggleAdmin} className="mt-8 text-stone-400 underline text-xs">כניסת מנהל</button>}
+                    </div>
+                );
+            }
+
+            const historySlots = slots
+                .filter(s => isAdmin ? true : Object.values(s.wheel_assignments || {}).includes(profile?.full_name))
+                .sort((a, b) => new Date(b.slot_date) - new Date(a.slot_date));
+
+            return (
+                <div className="max-w-md mx-auto min-h-screen bg-white shadow-2xl flex flex-col relative text-right">
+                    <header className="bg-stone-800 text-white p-6 rounded-b-[2.5rem] flex justify-between items-center shadow-lg">
+                        <div className="flex items-center gap-4">
+                            <img src={LOGO_BASE64} className="logo-header" alt="Logo" />
+                            <div>
+                                <h2 className="text-[10px] font-bold opacity-40 uppercase tracking-widest">{isAdmin ? 'ADMIN' : 'STUDENT'}</h2>
+                                <div className="flex items-center gap-2">
+                                    <h2 className="text-lg font-bold leading-tight">{isAdmin ? 'מנהל' : (profile?.full_name || 'אורח')}</h2>
+                                    {!isAdmin && <button onClick={() => setShowNameModal(true)} className="text-xs opacity-50 hover:opacity-100 bg-white/10 px-2 py-1 rounded">✏️</button>}
+                                </div>
+                            </div>
+                        </div>
+                        <button onClick={handleLogout} className="bg-stone-700 px-3 py-1 rounded-xl text-[10px]">יציאה</button>
+                    </header>
+
+                    <nav className="flex bg-white sticky top-0 z-40 border-b">
+                        <button onClick={() => setActiveTab('guided')} className={`flex-1 py-5 text-xs font-bold ${activeTab === 'guided' ? 'tab-active' : 'text-stone-400'}`}>שיעורים</button>
+                        <button onClick={() => setActiveTab('open')} className={`flex-1 py-5 text-xs font-bold ${activeTab === 'open' ? 'tab-active' : 'text-stone-400'}`}>פתוח</button>
+                        <button onClick={() => setActiveTab('community')} className={`flex-1 py-5 text-xs font-bold ${activeTab === 'community' ? 'tab-active' : 'text-stone-400'}`}>קהילה</button>
+                        <button onClick={() => setActiveTab('history')} className={`flex-1 py-5 text-xs font-bold ${activeTab === 'history' ? 'tab-active' : 'text-stone-400'}`}>היסטוריה</button>
+                    </nav>
+
+                    <main className="p-4 flex-grow space-y-6 pb-24">
+                        {isAdmin && activeTab !== 'history' && activeTab !== 'community' && (
+                            <section className="bg-stone-50 p-6 rounded-[2rem] border border-stone-200">
+                                <h3 className="font-bold text-stone-800 mb-4 text-center">פתיחת מועד {activeTab === 'guided' ? 'שיעור' : 'פתוח'}</h3>
+                                <form onSubmit={handleAddSlot} className="space-y-2">
+                                    <input type="date" name="d" required className="clay-input" />
+                                    <input type="text" name="t" placeholder="שעה (10:00-13:00)" required className="clay-input text-right" />
+                                    <div className="pt-2 border-t mt-4">
+                                        <p className="text-[10px] text-stone-400 mb-1">שיבוץ ישיר (אופציונלי):</p>
+                                        {[1,2,3,4,5].map(n => <input key={n} name={`w${n}`} placeholder={`תלמיד ${n}`} className="clay-input mb-1 text-xs" />)}
+                                    </div>
+                                    <button type="submit" className="w-full bg-stone-800 text-white py-4 rounded-2xl font-bold mt-2 shadow-lg">פרסם בלוח</button>
+                                </form>
+                            </section>
+                        )}
+
+                        {(activeTab === 'guided' || activeTab === 'open') && slots.filter(s => s.lesson_type === activeTab).map(slot => {
+                            const takenCount = Object.keys(slot.wheel_assignments || {}).length;
+                            const isFull = takenCount >= 5;
+                            const amIInWaitlist = session && waitlist.some(w => w.slot_id === slot.id && w.user_id === session?.user?.id);
+                            return (
+                                <div key={slot.id} className="card p-6 border-b-4 border-stone-100 relative">
+                                    <div className="flex justify-between items-start mb-6">
+                                        <h4 className="font-bold text-lg text-stone-800 leading-tight">
+                                            {new Date(slot.slot_date).toLocaleDateString('he-IL', {weekday: 'long', day: 'numeric', month: 'short'})} | {slot.start_time}
+                                        </h4>
+                                        {isFull && !isAdmin && session && !Object.values(slot.wheel_assignments || {}).includes(profile?.full_name) && (
+                                            <div className="absolute left-6 top-12">
+                                                {amIInWaitlist ? <span className="text-[10px] bg-yellow-100 text-yellow-700 px-2 py-1 rounded-lg font-bold">בהמתנה ⏳</span> : <button onClick={() => joinWaitlist(slot.id)} className="bg-stone-800 text-white px-3 py-1 rounded-lg text-[10px] font-bold shadow-lg animate-pulse">הצטרף להמתנה</button>}
+                                            </div>
+                                        )}
+                                        {isAdmin && <button onClick={() => handleDeleteSlot(slot.id)} className="text-red-500 text-[10px] font-bold underline">מחק שיעור</button>}
+                                    </div>
+                                    <div className="flex justify-between gap-1">
+                                        {[1,2,3,4,5].map(wNum => {
+                                            const occ = slot.wheel_assignments?.[wNum];
+                                            const isMe = occ === profile?.full_name;
+                                            return (
+                                                <div key={wNum} className="flex flex-col items-center">
+                                                    <button onClick={() => setSelectedWheelInfo({ slot, wId: wNum })}
+                                                        className={`w-11 h-11 rounded-full border-2 flex items-center justify-center font-bold text-xs transition-all shadow-sm
+                                                        ${occ ? (isMe ? 'bg-orange-600 text-white border-orange-800 scale-110' : 'bg-stone-200 border-stone-300 text-stone-400') : 'bg-stone-50 border-stone-200 text-stone-600'}`}>
+                                                        {wNum}
+                                                    </button>
+                                                    <span className="text-[8px] mt-2 text-stone-400 font-bold max-w-[42px] truncate">{occ || 'פנוי'}</span>
+                                                    {(isAdmin || isMe) && occ && <button onClick={() => handleCancel(slot, wNum)} className="text-[9px] text-red-500 font-bold underline mt-1">ביטול</button>}
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                </div>
+                            );
+                        })}
+
+                        {activeTab === 'community' && (
+                            <div className="space-y-4">
+                                {swaps.length === 0 && <p className="text-center text-stone-400 py-10">אין הצעות להחלפה כרגע.</p>}
+                                {swaps.map(swap => (
+                                    <div key={swap.id} className="card p-5 border-r-8 border-orange-500 flex justify-between items-center shadow-md">
+                                        <div>
+                                            <p className="font-bold text-stone-800 text-lg">{swap.original_student}</p>
+                                            <p className="text-sm text-stone-500">{new Date(swap.slot_date).toLocaleDateString('he-IL', {day:'numeric', month:'short'})} | {swap.start_time}</p>
+                                        </div>
+                                        {!isAdmin && session && <button onClick={() => executeSwap(swap)} className="bg-green-600 text-white px-5 py-3 rounded-2xl text-xs font-bold shadow-lg">אני מחליף!</button>}
+                                        {isAdmin && <button onClick={() => handleManagerCancelSwap(swap)} className="bg-red-600 text-white px-5 py-3 rounded-2xl text-xs font-bold shadow-lg">אשר ביטול (מנהל)</button>}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {activeTab === 'history' && (
+                            <div className="space-y-4">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h3 className="font-bold text-lg text-stone-800">{isAdmin ? 'ניהול היסטוריה' : 'השיעורים שלי'}</h3>
+                                    {isAdmin && (
+                                        <div className="bg-stone-200 p-1 rounded-lg flex text-xs font-bold">
+                                            <button onClick={() => setHistoryView('list')} className={`px-3 py-1 rounded-md ${historyView === 'list' ? 'bg-white shadow' : 'text-stone-500'}`}>רשימה</button>
+                                            <button onClick={() => setHistoryView('report')} className={`px-3 py-1 rounded-md ${historyView === 'report' ? 'bg-white shadow' : 'text-stone-500'}`}>דוח חודשי</button>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {isAdmin && historyView === 'report' && (
+                                    <div className="space-y-8">
+                                        {Object.keys(reportByMonth).sort((a,b) => b.localeCompare(a)).map(month => (
+                                            <div key={month} className="bg-white rounded-2xl shadow overflow-hidden">
+                                                <h4 className="bg-stone-800 text-white text-center py-2 font-bold text-sm">{month}</h4>
+                                                <table className="report-table">
+                                                    <thead>
+                                                        <tr>
+                                                            <th>שם</th>
+                                                            <th>שיעורים</th>
+                                                            <th>עצמאי (כניסות)</th>
+                                                            <th>עצמאי (שעות)</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {Object.entries(reportByMonth[month]).map(([name, data]) => (
+                                                            <tr key={name}>
+                                                                <td className="font-bold">{name}</td>
+                                                                <td className="text-green-600 font-bold">{data.guided}</td>
+                                                                <td className="text-blue-600">{data.open_count}</td>
+                                                                <td>
+                                                                    <input 
+                                                                        type="number" 
+                                                                        defaultValue={data.manual_hours || ""} 
+                                                                        placeholder="-"
+                                                                        className="hours-input"
+                                                                        onBlur={(e) => handleHoursChange(name, month, e.target.value)}
+                                                                    />
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        ))}
+                                        {Object.keys(reportByMonth).length === 0 && <p className="text-center text-stone-400">אין נתונים</p>}
+                                    </div>
+                                )}
+
+                                {(historyView === 'list' || !isAdmin) && (
+                                    <>
+                                        {historySlots.length === 0 && <p className="text-center text-stone-400">אין היסטוריה להצגה.</p>}
+                                        {historySlots.map(slot => (
+                                            <div key={slot.id} className="card p-5 border-r-8 border-blue-500 flex flex-col gap-3">
+                                                <div className="flex justify-between items-center">
+                                                    <div>
+                                                        <p className="font-bold text-stone-800">{new Date(slot.slot_date).toLocaleDateString('he-IL')}</p>
+                                                        <p className="text-sm text-stone-500">{slot.start_time} | {slot.lesson_type === 'guided' ? 'שיעור' : 'פתוח'}</p>
+                                                    </div>
+                                                    {!isAdmin && <button onClick={() => addToCalendar(slot.slot_date, slot.start_time)} className="text-2xl" title="הוסף ליומן">📅</button>}
+                                                    {isAdmin && <button onClick={() => handleDeleteSlot(slot.id)} className="text-red-500 text-xs font-bold border border-red-200 px-2 py-1 rounded hover:bg-red-50">מחק הכל</button>}
+                                                </div>
+                                                {isAdmin && (
+                                                    <div className="bg-stone-50 p-3 rounded-xl">
+                                                        <p className="text-xs font-bold text-stone-500 mb-2">שיבוץ:</p>
+                                                        <div className="flex gap-1 justify-between">
+                                                            {[1,2,3,4,5].map(wNum => {
+                                                                const occ = slot.wheel_assignments?.[wNum];
+                                                                return (
+                                                                    <button key={wNum} onClick={() => setSelectedWheelInfo({ slot, wId: wNum })}
+                                                                        className={`w-8 h-8 rounded-full border text-[10px] font-bold flex items-center justify-center 
+                                                                        ${occ ? 'bg-orange-100 border-orange-300 text-orange-800' : 'bg-white border-stone-200 text-stone-300'}`}>
+                                                                        {occ ? wNum : '-'}
+                                                                    </button>
+                                                                )
+                                                            })}
+                                                        </div>
+                                                        {Object.values(slot.wheel_assignments || {}).length > 0 && (
+                                                            <div className="mt-2 text-xs text-stone-600">
+                                                                {Object.entries(slot.wheel_assignments).map(([k,v]) => <span key={k} className="mr-2">• {v}</span>)}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </>
+                                )}
+                            </div>
+                        )}
+                    </main>
+
+                    {selectedWheelInfo && (
+                        <div className="modal-overlay" onClick={() => setSelectedWheelInfo(null)}>
+                            <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl text-center" onClick={e => e.stopPropagation()}>
+                                <h3 className="text-2xl font-bold mb-4">אובניים {selectedWheelInfo.wId}</h3>
+                                {isAdmin && <p className="text-xs text-red-500 mb-2 font-bold">מצב עריכת מנהל</p>}
+                                <p className="text-stone-600 mb-8 italic bg-stone-50 p-4 rounded-2xl">"{wheelDescriptions[selectedWheelInfo.wId.toString()] || 'פרטים בסטודיו'}"</p>
+                                <div className="space-y-3">
+                                    {(!selectedWheelInfo.slot.wheel_assignments?.[selectedWheelInfo.wId] || isAdmin) ? (
+                                        <button onClick={() => bookWheel(selectedWheelInfo.slot.id, selectedWheelInfo.wId)} className="w-full bg-stone-900 text-white py-4 rounded-2xl font-bold text-lg">
+                                            {isAdmin ? (selectedWheelInfo.slot.wheel_assignments?.[selectedWheelInfo.wId] ? 'שנה שם תלמיד' : 'שבץ תלמיד ידנית') : 'הזמן אובניים אלו'}
+                                        </button>
+                                    ) : <p className="font-bold py-4 text-stone-800">תפוס ע"י {selectedWheelInfo.slot.wheel_assignments[selectedWheelInfo.wId]}</p>}
+                                    <button onClick={() => setSelectedWheelInfo(null)} className="w-full text-stone-400 font-bold py-2">סגור</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {showNameModal && (
+                        <div className="modal-overlay">
+                            <div className="bg-white w-full max-w-xs rounded-[2rem] p-8 shadow-2xl text-center relative">
+                                {profile?.full_name && <button onClick={() => setShowNameModal(false)} className="absolute top-4 left-4 text-stone-400 font-bold text-xl">✕</button>}
+                                <h3 className="text-xl font-bold mb-4 text-stone-800">בחירת שם לתצוגה</h3>
+                                <p className="text-xs text-stone-500 mb-6">כך תופיע בשיבוצים (ניתן לשינוי)</p>
+                                <form onSubmit={(e) => { e.preventDefault(); handleSaveName(e.target.name.value); }}>
+                                    <input name="name" defaultValue={profile?.full_name} placeholder="שם מלא" className="clay-input text-center mb-4 font-bold text-lg" autoFocus />
+                                    <button type="submit" className="w-full bg-orange-600 text-white py-3 rounded-xl font-bold shadow-lg">שמור שם</button>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
