@@ -588,4 +588,45 @@
                     </nav>
 
                     {/* Modals */}
-                    {selected
+                    {selectedWheelInfo && (
+                        <div className="modal-overlay" onClick={() => setSelectedWheelInfo(null)}>
+                            <div className="bg-[#FAF7F2] w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl text-center relative border border-white" onClick={e => e.stopPropagation()}>
+                                <h3 className="font-display text-[#5C3D28] text-3xl font-bold mb-2">עמדה {selectedWheelInfo.wId}</h3>
+                                {isAdmin && <p className="text-xs text-[#C17B4A] mb-4 font-bold tracking-widest uppercase">ניהול עמדה</p>}
+                                <p className="text-[#9B9185] mb-8 font-medium leading-relaxed bg-white p-4 rounded-2xl shadow-sm">
+                                    {wheelDescriptions[selectedWheelInfo.wId.toString()] || 'אובניים חשמליים'}
+                                </p>
+                                <div className="space-y-4">
+                                    {(!selectedWheelInfo.slot.wheel_assignments?.[selectedWheelInfo.wId] || isAdmin) ? (
+                                        <button onClick={() => bookWheel(selectedWheelInfo.slot.id, selectedWheelInfo.wId)} className="w-full btn-primary">
+                                            {isAdmin ? (selectedWheelInfo.slot.wheel_assignments?.[selectedWheelInfo.wId] ? 'שינוי שיבוץ' : 'שיבוץ ידני') : 'אני רוצה את העמדה הזו'}
+                                        </button>
+                                    ) : <p className="font-bold py-3 text-[#5C3D28] bg-white rounded-xl">תפוס ע"י {selectedWheelInfo.slot.wheel_assignments[selectedWheelInfo.wId]}</p>}
+                                    <button onClick={() => setSelectedWheelInfo(null)} className="w-full text-[#9B9185] font-bold py-2 mt-2">חזרה</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {showNameModal && (
+                        <div className="modal-overlay">
+                            <div className="bg-[#FAF7F2] w-full max-w-xs rounded-[2.5rem] p-8 shadow-2xl text-center relative border border-white">
+                                {profile?.full_name && <button onClick={() => setShowNameModal(false)} className="absolute top-5 left-5 text-[#9B9185] text-xl">✕</button>}
+                                <h3 className="font-display text-2xl font-bold mb-2 text-[#5C3D28]">איך קוראים לך?</h3>
+                                <p className="text-sm text-[#9B9185] mb-6 font-medium">כך תופיע בלוח השיבוצים בסטודיו</p>
+                                <form onSubmit={(e) => { e.preventDefault(); handleSaveName(e.target.name.value); }}>
+                                    <input name="name" defaultValue={profile?.full_name} placeholder="השם שלך" className="clay-input text-center mb-6 font-bold text-lg shadow-sm" autoFocus />
+                                    <button type="submit" className="w-full btn-primary">שמירה</button>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
