@@ -1,0 +1,205 @@
+/* יבוא פונטים - גופן קריא לטקסט וגופן קלאסי לכותרות */
+@import url('https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;600;700&family=Frank+Ruhl+Libre:wght@400;700;900&display=swap');
+
+:root {
+    --bg-sand: #FAF7F2;
+    --clay-dark: #5C3D28;
+    --terracotta: #C17B4A;
+    --stone: #9B9185;
+    --cream: #FFF9F0;
+}
+
+body { 
+    font-family: 'Assistant', sans-serif; 
+    background-color: var(--bg-sand); 
+    color: var(--clay-dark); 
+    -webkit-tap-highlight-color: transparent;
+}
+
+h1, h2, h3, h4, .font-display {
+    font-family: 'Frank Ruhl Libre', serif;
+}
+
+/* עיצוב כרטיסיות רך ואורגני */
+.card-premium { 
+    background: #ffffff; 
+    border-radius: 28px; 
+    box-shadow: 0 10px 30px rgba(92, 61, 40, 0.04);
+    border: 1px solid rgba(193, 123, 74, 0.1);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* שדות הזנה נקיים */
+.clay-input { 
+    width: 100%; 
+    padding: 16px 20px; 
+    border: 1px solid rgba(155, 145, 133, 0.3); 
+    border-radius: 16px; 
+    background: #ffffff; 
+    font-size: 16px; 
+    transition: all 0.3s;
+    color: var(--clay-dark);
+}
+.clay-input:focus {
+    outline: none;
+    border-color: var(--terracotta);
+    box-shadow: 0 0 0 4px rgba(193, 123, 74, 0.1);
+}
+
+/* כפתור ראשי חמים */
+.btn-primary {
+    background: var(--terracotta);
+    color: white;
+    padding: 16px;
+    border-radius: 16px;
+    font-weight: 700;
+    font-size: 18px;
+    box-shadow: 0 8px 20px rgba(193, 123, 74, 0.25);
+    transition: all 0.3s;
+}
+.btn-primary:active { transform: translateY(2px); }
+
+/* תפריט תחתון למובייל */
+.bottom-nav {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    background: rgba(250, 247, 242, 0.95);
+    backdrop-filter: blur(15px);
+    -webkit-backdrop-filter: blur(15px);
+    border-top: 1px solid rgba(193, 123, 74, 0.15);
+    display: flex;
+    justify-content: space-around;
+    padding: 12px 10px calc(12px + env(safe-area-inset-bottom));
+    z-index: 50;
+}
+
+.nav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    color: var(--stone);
+    font-size: 11px;
+    font-weight: 600;
+    transition: all 0.3s;
+}
+.nav-item.active {
+    color: var(--terracotta);
+    transform: translateY(-2px);
+}
+.nav-icon { font-size: 22px; }
+
+.modal-overlay { 
+    background: rgba(44, 36, 24, 0.5); 
+    backdrop-filter: blur(8px); 
+    -webkit-backdrop-filter: blur(8px);
+    position: fixed; inset: 0; z-index: 100; 
+    display: flex; align-items: center; justify-content: center; padding: 20px; 
+}
+
+/* עיצוב אובניים (עמדות) */
+.wheel-btn {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 16px;
+    transition: all 0.3s;
+}
+.wheel-free {
+    background: #ffffff;
+    border: 2px dashed var(--terracotta);
+    color: var(--terracotta);
+}
+.wheel-my {
+    background: var(--terracotta);
+    border: 2px solid var(--terracotta);
+    color: #ffffff;
+    box-shadow: 0 6px 15px rgba(193, 123, 74, 0.3);
+    transform: scale(1.05);
+}
+.wheel-taken {
+    background: rgba(155, 145, 133, 0.15);
+    border: 2px solid transparent;
+    color: var(--stone);
+}
+
+/* טבלאות נקיות */
+.report-table { width: 100%; font-size: 14px; border-collapse: collapse; }
+.report-table th { text-align: right; padding: 12px; border-bottom: 2px solid rgba(193, 123, 74, 0.2); color: var(--clay-dark); }
+.report-table td { padding: 12px; border-bottom: 1px solid rgba(155, 145, 133, 0.1); }
+
+/* 🟢 הגבלת גודל הלוגו לשמירה על פרופורציות 🟢 */
+.logo-login {
+    height: 90px !important;       /* גובה קבוע וסביר למסך כניסה */
+    width: auto !important;        /* הרוחב יותאם אוטומטית כדי לא למעוך את התמונה */
+    max-width: 80vw !important;    /* מוודא שהלוגו לא יעקוף את רוחב המסך בטלפונים קטנים */
+    object-fit: contain !important;/* שומר על פרופורציות התמונה המקורית */
+    margin: 0 auto 20px auto !important;
+    display: block !important;
+}
+
+.logo-header {
+    height: 36px !important;       /* גובה קטן שמתאים לסרגל הניווט העליון */
+    width: auto !important;
+    max-width: 120px !important;
+    object-fit: contain !important;
+}
+/* ═══════════ LOGIN SCREEN ═══════════ */
+.login-wrapper {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background-color: var(--bg-sand);
+    background-image: url('https://www.transparenttextures.com/patterns/cream-paper.png');
+}
+
+.login-card {
+    width: 100%;
+    max-width: 420px;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(15px);
+    -webkit-backdrop-filter: blur(15px);
+    padding: 40px;
+    border-radius: 32px;
+    box-shadow: 0 20px 60px rgba(92, 61, 40, 0.08);
+    border: 1px solid rgba(193, 123, 74, 0.15);
+    text-align: center;
+    position: relative;
+}
+
+.login-title {
+    font-family: var(--font-display);
+    color: var(--clay-dark);
+    font-size: 36px;
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+
+.login-subtitle {
+    color: var(--stone);
+    font-size: 16px;
+    margin-bottom: 32px;
+}
+
+.login-form-group {
+    text-align: right;
+    margin-bottom: 16px;
+}
+
+.login-form-group label {
+    display: block;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--clay-dark);
+    margin-bottom: 8px;
+    padding-right: 4px;
+}
