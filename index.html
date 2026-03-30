@@ -39,6 +39,13 @@
         const LOGO_SRC = "images/LOGO1.png"; 
         const MAGIC_PASSWORD = "StudioShalem2026!!!"; 
 
+        const safeFormatDate = (dateString, options) => {
+            if (!dateString) return "תאריך חסר";
+            const d = new Date(dateString);
+            if (isNaN(d.getTime())) return "תאריך לא חוקי";
+            return d.toLocaleDateString('he-IL', options);
+        };
+
         const App = () => {
             const [session, setSession] = useState(null);
             const [profile, setProfile] = useState(null); 
@@ -57,6 +64,8 @@
             const [wheelDescriptions, setWheelDescriptions] = useState({});
             
             const [allStudents, setAllStudents] = useState([]);
+            const [selectedWheelInfo, setSelectedWheelInfo] = useState(null);
+            const [showNameModal, setShowNameModal] = useState(false);
 
             useEffect(() => {
                 const unsubscribeAuth = auth.onAuthStateChanged((user) => {
@@ -92,7 +101,6 @@
                 };
             }, []);
 
-            // מושך את רשימת כל התלמידים למנהל עבור ההשלמה האוטומטית
             useEffect(() => {
                 if (isAdmin) {
                     const unsub = db.collection('profiles').onSnapshot(snap => {
@@ -106,7 +114,7 @@
             const fetchProfile = async (userId) => {
                 try {
                     const docSnap = await db.collection('profiles').doc(userId).get();
-                    if (docSnap.exists && docSnap.data().full_name) {
+                    if (docSnap.exists && typeof docSnap.data === 'function' && docSnap.data().full_name) {
                         setProfile(docSnap.data());
                     } else {
                         setProfile({ id: userId, email: auth.currentUser?.email, full_name: "" });
@@ -166,7 +174,6 @@
                 await auth.signOut();
                 localStorage.removeItem('is_admin');
                 setIsAdmin(false); setProfile(null); setSession(null); setAuthMode('login');
-                window.location.reload();
             };
 
             const handleSaveName = async (newName) => {
@@ -191,7 +198,6 @@
                 const d = e.target.d.value;
                 const t = e.target.t.value;
                 
-                // התיקון לבעיית התאריך: במקום חסימת דפדפן שקטה, הודעה ברורה
                 if (!d) return alert("שים לב: חובה לבחור תאריך מדויק מהיומן (כולל שנה).");
                 if (!t) return alert("יש להזין שעת התחלה וסיום.");
 
@@ -209,43 +215,34 @@
                     e.target.reset();
                 } catch (error) { 
                     console.error("Error:", error); 
-                    alert("שגיאה. האם עדכנת את הגדרות ה-Rules בפיירבייס כפי שהסברתי?");
+                    alert("שגיאה. האם עדכנת את הגדרות ה-Rules בפיירבייס?");
                 }
             };
 
             const bookWheel = async (slotId, wheelId) => {
-                if (!profile && !isAdmin) return alert("חסר פרופיל");
+                if (!profile) return alert("חסר פרופיל");
                 const slot = slots.find(s => s.id === slotId);
                 let nameToBook = profile?.full_name;
 
-                if (isAdmin) {
-                    const current = slot.wheel_assignments?.[wheelId] || "";
-                    nameToBook = prompt("מנהל - הזן שם (או ריק למחיקה):", current);
-                    if (nameToBook === null) return;
-                    if (nameToBook.trim() === "") { 
-                        const upd = { ...slot.wheel_assignments }; delete upd[wheelId];
-                        await db.collection('open_studio').doc(slotId).update({ wheel_assignments: upd });
-                        setSelectedWheelInfo(null); return;
-                    }
-                }
-
-                if (Object.values(slot.wheel_assignments || {}).includes(nameToBook) && !isAdmin) {
-                    return alert("שגיאה: התלמיד כבר רשום.");
+                if (Object.values(slot.wheel_assignments || {}).includes(nameToBook)) {
+                    return alert("שגיאה: את/ה כבר רשום/ה לשיעור זה.");
                 }
 
                 const upd = { ...slot.wheel_assignments, [wheelId]: nameToBook };
                 await db.collection('open_studio').doc(slotId).update({ wheel_assignments: upd });
                 
-                if (!isAdmin && confirm("נרשמת! להוסיף ליומן?")) addToCalendar(slot.slot_date, slot.start_time);
+                if (confirm("נרשמת! להוסיף ליומן?")) addToCalendar(slot.slot_date, slot.start_time);
                 setSelectedWheelInfo(null);
             };
 
             const handleCancel = async (slot, wheelId) => {
+                if (!slot.start_time || !slot.slot_date) return alert("תקלה בנתוני השיעור, פנה למנהל.");
                 const startTime = slot.start_time.split('-')[0].trim();
-                const diff = (new Date(`${slot.slot_date}T${startTime}`) - new Date()) / (1000 * 60 * 60);
+                const d = new Date(`${slot.slot_date}T${startTime}`);
+                const diff = (d - new Date()) / (1000 * 60 * 60);
 
-                if (!isAdmin && diff < 48) {
-                    if (confirm("פחות מ-48 שעות. לפרסם בקהילה?")) {
+                if (!isAdmin && diff < 48 && !isNaN(diff)) {
+                    if (confirm("פחות מ-48 שעות. לפרסם בקהילה להחלפה?")) {
                         await db.collection('swap_market').add({
                             original_student: profile.full_name, original_user_id: session.user.id,
                             slot_id: slot.id, wheel_id: wheelId, slot_date: slot.slot_date, start_time: slot.start_time,
@@ -256,14 +253,16 @@
                     return;
                 }
 
-                if (confirm(isAdmin ? "למחוק את התלמיד?" : "למחוק רישום?")) {
+                if (confirm("האם לבטל את הרישום לעמדה זו?")) {
                     const upd = { ...slot.wheel_assignments }; delete upd[wheelId];
                     await db.collection('open_studio').doc(slot.id).update({ wheel_assignments: upd });
                 }
             };
 
             const handleDeleteSlot = async (slotId) => {
-                if(confirm("למחוק את כל השיעור?")) await db.collection('open_studio').doc(slotId).delete();
+                if(confirm("אזהרה: האם למחוק את השיעור הזה לחלוטין מלוח הסטודיו? פעולה זו תמחק גם את כל השיבוצים הקיימים בו.")) {
+                    await db.collection('open_studio').doc(slotId).delete();
+                }
             };
 
             const handleManagerCancelSwap = async (swapItem) => {
@@ -295,12 +294,15 @@
             };
 
             const joinWaitlist = async (slotId) => {
+                if (!session?.user?.id) return;
                 await db.collection('waitlist').add({ slot_id: slotId, user_id: session.user.id, email: session.user.email, created_at: firebase.firestore.FieldValue.serverTimestamp() });
                 alert("נוספת להמתנה!");
             };
 
             const addToCalendar = (date, time) => {
+                if(!date || !time) return;
                 const [startH, endH] = time.split('-').map(t => t.trim());
+                if(!startH || !endH) return;
                 const startDate = new Date(`${date}T${startH}`).toISOString().replace(/-|:|\.\d\d\d/g, "");
                 const endDate = new Date(`${date}T${endH}`).toISOString().replace(/-|:|\.\d\d\d/g, "");
                 window.open(`https://www.google.com/calendar/render?action=TEMPLATE&text=שיעור קדרות&dates=${startDate}/${endDate}&details=סטודיו&location=סטודיו`, '_blank');
@@ -315,7 +317,10 @@
                 if (!isAdmin) return {};
                 const grouped = {};
                 slots.forEach(slot => {
+                    if (!slot.slot_date) return;
                     const date = new Date(slot.slot_date);
+                    if (isNaN(date.getTime())) return; 
+                    
                     const monthKey = date.toLocaleString('he-IL', { month: 'long', year: 'numeric' });
                     const assignments = Object.values(slot.wheel_assignments || {});
                     if (!grouped[monthKey]) grouped[monthKey] = {};
@@ -394,17 +399,19 @@
 
             const historySlots = slots
                 .filter(s => isAdmin ? true : Object.values(s.wheel_assignments || {}).includes(profile?.full_name))
-                .sort((a, b) => new Date(b.slot_date) - new Date(a.slot_date));
+                .sort((a, b) => {
+                    const da = new Date(a.slot_date).getTime();
+                    const db = new Date(b.slot_date).getTime();
+                    return (isNaN(db) ? 0 : db) - (isNaN(da) ? 0 : da);
+                });
 
             return (
-                <div className="max-w-lg mx-auto min-h-screen flex flex-col relative text-right bg-[url('https://www.transparenttextures.com/patterns/cream-paper.png')] pb-28">
+                <div className="max-w-md md:max-w-4xl mx-auto min-h-screen flex flex-col relative text-right bg-[url('https://www.transparenttextures.com/patterns/cream-paper.png')] pb-32">
                     
-                    {/* המאגר ששומר את כל שמות התלמידים להשלמה אוטומטית */}
                     <datalist id="students-list">
                         {allStudents.map((name, idx) => <option key={idx} value={name} />)}
                     </datalist>
 
-                    {/* Header */}
                     <header className="px-6 pt-8 pb-4 flex justify-between items-center">
                         <div>
                             <h2 className="text-xs font-bold text-[#C17B4A] tracking-wider uppercase mb-1">{isAdmin ? 'ניהול סטודיו' : 'תלמיד.ה'}</h2>
@@ -416,87 +423,98 @@
                         <button onClick={handleLogout} className="text-[#9B9185] text-sm font-semibold bg-white px-4 py-2 rounded-full shadow-sm">יציאה</button>
                     </header>
 
-                    {/* Main Content */}
                     <main className="px-4 space-y-6">
                         {isAdmin && activeTab !== 'history' && activeTab !== 'community' && (
                             <section className="card-premium p-6">
                                 <h3 className="font-display text-xl font-bold text-[#5C3D28] mb-4 text-center">פתיחת מועד {activeTab === 'guided' ? 'שיעור' : 'פתוח'}</h3>
                                 <form onSubmit={handleAddSlot} className="space-y-3">
-                                    {/* הסרנו פה את ה-required כדי שלא יחסום אותך שקוף, אלא ייתן התראה יפה */}
-                                    <input type="date" name="d" className="clay-input" />
-                                    <input type="text" name="t" placeholder="שעה (למשל: 10:00-13:00)" className="clay-input" />
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <input type="date" name="d" className="clay-input" />
+                                        <input type="text" name="t" placeholder="שעה (למשל: 10:00-13:00)" className="clay-input" />
+                                    </div>
                                     <div className="pt-4 mt-2 border-t border-[#FFF9F0]">
                                         <p className="text-xs text-[#9B9185] mb-2 font-semibold">שיבוץ ישיר מראש (אופציונלי):</p>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            {/* פה נמצאת ההשלמה האוטומטית מתוך רשימת התלמידים */}
+                                        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                                             {[1,2,3,4,5].map(n => <input key={n} name={`w${n}`} list="students-list" autoComplete="off" placeholder={`עמדה ${n}`} className="clay-input text-sm py-2" />)}
                                         </div>
                                     </div>
-                                    <button type="submit" className="w-full btn-primary mt-2">פרסם בלוח</button>
+                                    <button type="submit" className="w-full btn-primary mt-4 md:w-1/3 md:mx-auto md:block">פרסם בלוח</button>
                                 </form>
                             </section>
                         )}
 
-                        {(activeTab === 'guided' || activeTab === 'open') && slots.filter(s => s.lesson_type === activeTab).map(slot => {
-                            const takenCount = Object.keys(slot.wheel_assignments || {}).length;
-                            const isFull = takenCount >= 5;
-                            const amIInWaitlist = session && waitlist.some(w => w.slot_id === slot.id && w.user_id === session?.user?.id);
-                            
-                            return (
-                                <div key={slot.id} className="card-premium p-6 relative overflow-hidden">
-                                    <div className="flex justify-between items-start mb-6">
-                                        <div>
-                                            <h4 className="font-display text-2xl font-bold text-[#5C3D28]">
-                                                {new Date(slot.slot_date).toLocaleDateString('he-IL', {weekday: 'long', day: 'numeric', month: 'short'})}
-                                            </h4>
-                                            <p className="text-[#C17B4A] font-semibold mt-1 flex items-center gap-2">
-                                                <span>🕒</span> {slot.start_time}
-                                            </p>
-                                        </div>
-                                        {isAdmin && <button onClick={() => handleDeleteSlot(slot.id)} className="text-red-400 bg-red-50 px-3 py-1 rounded-full text-xs font-bold">מחק</button>}
-                                    </div>
-
-                                    <div className="flex justify-between items-end gap-2 relative z-10">
-                                        {[1,2,3,4,5].map(wNum => {
-                                            const occ = slot.wheel_assignments?.[wNum];
-                                            const isMe = occ === profile?.full_name;
-                                            let btnClass = "wheel-free";
-                                            if (occ) btnClass = isMe ? "wheel-my" : "wheel-taken";
-                                            
-                                            return (
-                                                <div key={wNum} className="flex flex-col items-center gap-2">
-                                                    <button onClick={() => setSelectedWheelInfo({ slot, wId: wNum })} className={`wheel-btn ${btnClass}`}>
-                                                        {wNum}
-                                                    </button>
-                                                    <span className="text-[10px] font-semibold text-[#9B9185] text-center w-12 truncate leading-tight">
-                                                        {occ ? (isMe ? 'שלי' : occ.split(' ')[0]) : 'פנוי'}
-                                                    </span>
-                                                    {(isAdmin || isMe) && occ && <button onClick={() => handleCancel(slot, wNum)} className="text-[10px] text-[#C17B4A] font-bold">ביטול</button>}
+                        {(activeTab === 'guided' || activeTab === 'open') && (
+                            /* 🟢 רשת עמודות למחשב (2 עמודות) ולנייד (עמודה 1) 🟢 */
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                {slots.filter(s => s.lesson_type === activeTab).map(slot => {
+                                    const takenCount = Object.keys(slot.wheel_assignments || {}).length;
+                                    const isFull = takenCount >= 5;
+                                    const amIInWaitlist = session?.user?.id && waitlist.some(w => w.slot_id === slot.id && w.user_id === session.user.id);
+                                    
+                                    return (
+                                        <div key={slot.id} className="card-premium p-6 relative overflow-hidden flex flex-col justify-between">
+                                            <div className="flex justify-between items-start mb-6">
+                                                <div>
+                                                    <h4 className="font-display text-2xl font-bold text-[#5C3D28]">
+                                                        {safeFormatDate(slot.slot_date, {weekday: 'long', day: 'numeric', month: 'short'})}
+                                                    </h4>
+                                                    <p className="text-[#C17B4A] font-semibold mt-1 flex items-center gap-2">
+                                                        <span>🕒</span> {slot.start_time || 'שעה לא ידועה'}
+                                                    </p>
                                                 </div>
-                                            )
-                                        })}
-                                    </div>
+                                                {isAdmin && <button onClick={() => handleDeleteSlot(slot.id)} className="text-red-500 bg-red-50 px-4 py-2 rounded-xl text-sm font-bold border border-red-100 hover:bg-red-100 transition">מחק שיעור</button>}
+                                            </div>
 
-                                    {isFull && !isAdmin && session && !Object.values(slot.wheel_assignments || {}).includes(profile?.full_name) && (
-                                        <div className="mt-6 pt-4 border-t border-[#FAF7F2] text-center">
-                                            {amIInWaitlist ? 
-                                                <span className="text-sm bg-[#FFF9F0] text-[#C17B4A] px-4 py-2 rounded-full font-bold">את.ה ברשימת ההמתנה ⏳</span> : 
-                                                <button onClick={() => joinWaitlist(slot.id)} className="text-sm bg-white border border-[#C17B4A] text-[#C17B4A] px-6 py-2 rounded-full font-bold hover:bg-[#FFF9F0] transition">הצטרף לרשימת המתנה</button>
-                                            }
+                                            <div className="flex justify-between items-end gap-2 relative z-10 mt-auto">
+                                                {[1,2,3,4,5].map(wNum => {
+                                                    const occ = slot.wheel_assignments?.[wNum];
+                                                    const isMe = occ === profile?.full_name;
+                                                    let btnClass = "wheel-free";
+                                                    if (occ) btnClass = isMe ? "wheel-my" : "wheel-taken";
+                                                    
+                                                    let displayName = 'פנוי';
+                                                    if (occ) {
+                                                        if (isMe) displayName = 'שלי';
+                                                        else if (typeof occ === 'string') displayName = occ.split(' ')[0];
+                                                        else displayName = 'תפוס';
+                                                    }
+
+                                                    return (
+                                                        <div key={wNum} className="flex flex-col items-center gap-2">
+                                                            <button onClick={() => setSelectedWheelInfo({ slot, wId: wNum })} className={`wheel-btn ${btnClass}`}>
+                                                                {wNum}
+                                                            </button>
+                                                            <span className="text-[10px] font-semibold text-[#9B9185] text-center w-12 truncate leading-tight">
+                                                                {displayName}
+                                                            </span>
+                                                            {(isAdmin || isMe) && occ && <button onClick={() => handleCancel(slot, wNum)} className="text-[10px] text-[#C17B4A] font-bold mt-1 bg-[#FFF9F0] px-2 py-1 rounded-full">ביטול</button>}
+                                                        </div>
+                                                    )
+                                                })}
+                                            </div>
+
+                                            {isFull && !isAdmin && session && !Object.values(slot.wheel_assignments || {}).includes(profile?.full_name) && (
+                                                <div className="mt-6 pt-4 border-t border-[#FAF7F2] text-center">
+                                                    {amIInWaitlist ? 
+                                                        <span className="text-sm bg-[#FFF9F0] text-[#C17B4A] px-4 py-2 rounded-full font-bold">את.ה ברשימת ההמתנה ⏳</span> : 
+                                                        <button onClick={() => joinWaitlist(slot.id)} className="text-sm bg-white border border-[#C17B4A] text-[#C17B4A] px-6 py-2 rounded-full font-bold hover:bg-[#FFF9F0] transition">הצטרף לרשימת המתנה</button>
+                                                    }
+                                                </div>
+                                            )}
                                         </div>
-                                    )}
-                                </div>
-                            );
-                        })}
+                                    );
+                                })}
+                            </div>
+                        )}
 
                         {activeTab === 'community' && (
-                            <div className="space-y-4">
-                                {swaps.length === 0 && <p className="text-center text-[#9B9185] py-10 font-semibold">אין הצעות להחלפה כרגע. הכל רגוע.</p>}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {swaps.length === 0 && <p className="text-center text-[#9B9185] py-10 font-semibold md:col-span-full">אין הצעות להחלפה כרגע. הכל רגוע.</p>}
                                 {swaps.map(swap => (
                                     <div key={swap.id} className="card-premium p-5 flex justify-between items-center border-r-4 border-[#C17B4A]">
                                         <div>
                                             <p className="font-display font-bold text-[#5C3D28] text-xl">{swap.original_student}</p>
-                                            <p className="text-sm text-[#9B9185] font-semibold">{new Date(swap.slot_date).toLocaleDateString('he-IL', {day:'numeric', month:'short'})} | {swap.start_time}</p>
+                                            <p className="text-sm text-[#9B9185] font-semibold">{safeFormatDate(swap.slot_date, {day:'numeric', month:'short'})} | {swap.start_time}</p>
                                         </div>
                                         {!isAdmin && session && <button onClick={() => executeSwap(swap)} className="btn-primary py-2 px-6 text-sm">אני מחליף!</button>}
                                         {isAdmin && <button onClick={() => handleManagerCancelSwap(swap)} className="bg-red-50 text-red-500 px-4 py-2 rounded-xl text-xs font-bold">אשר ביטול</button>}
@@ -509,13 +527,13 @@
                             <div className="space-y-6">
                                 {isAdmin && (
                                     <div className="bg-white p-1 rounded-2xl flex text-sm font-bold shadow-sm mx-auto w-fit mb-6">
-                                        <button onClick={() => setHistoryView('list')} className={`px-6 py-2 rounded-xl transition ${historyView === 'list' ? 'bg-[#FAF7F2] text-[#C17B4A]' : 'text-[#9B9185]'}`}>רשימה</button>
-                                        <button onClick={() => setHistoryView('report')} className={`px-6 py-2 rounded-xl transition ${historyView === 'report' ? 'bg-[#FAF7F2] text-[#C17B4A]' : 'text-[#9B9185]'}`}>דוח חודשי</button>
+                                        <button onClick={() => setHistoryView('list')} className={`px-6 py-2 rounded-xl transition ${historyView === 'list' ? 'bg-[#FAF7F2] text-[#C17B4A]' : 'text-[#9B9185]'}`}>רשימה כללית</button>
+                                        <button onClick={() => setHistoryView('report')} className={`px-6 py-2 rounded-xl transition ${historyView === 'report' ? 'bg-[#FAF7F2] text-[#C17B4A]' : 'text-[#9B9185]'}`}>דוחות חודשיים</button>
                                     </div>
                                 )}
 
                                 {isAdmin && historyView === 'report' && (
-                                    <div className="space-y-6">
+                                    <div className="grid grid-cols-1 gap-6">
                                         {Object.keys(reportByMonth).sort((a,b) => b.localeCompare(a)).map(month => (
                                             <div key={month} className="card-premium overflow-hidden border-none p-0">
                                                 <h4 className="bg-[#FAF7F2] text-[#5C3D28] font-display font-bold text-lg p-4 text-center border-b border-[#FFF9F0]">{month}</h4>
@@ -549,16 +567,16 @@
                                 )}
 
                                 {(historyView === 'list' || !isAdmin) && (
-                                    <div className="space-y-4">
-                                        {historySlots.length === 0 && <p className="text-center text-[#9B9185] py-10 font-semibold">טרם השתתפת בשיעורים.</p>}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        {historySlots.length === 0 && <p className="text-center text-[#9B9185] py-10 font-semibold md:col-span-full">אין שיעורים להצגה.</p>}
                                         {historySlots.map(slot => (
                                             <div key={slot.id} className="card-premium p-5 flex items-center justify-between">
                                                 <div>
-                                                    <p className="font-display font-bold text-[#5C3D28] text-xl">{new Date(slot.slot_date).toLocaleDateString('he-IL', {day:'numeric', month:'long'})}</p>
+                                                    <p className="font-display font-bold text-[#5C3D28] text-xl">{safeFormatDate(slot.slot_date, {day:'numeric', month:'long'})}</p>
                                                     <p className="text-sm text-[#9B9185] font-semibold">{slot.start_time} • {slot.lesson_type === 'guided' ? 'שיעור' : 'פתוח'}</p>
                                                 </div>
                                                 {!isAdmin && <button onClick={() => addToCalendar(slot.slot_date, slot.start_time)} className="w-12 h-12 bg-[#FAF7F2] rounded-full flex items-center justify-center text-xl hover:bg-[#FFF9F0] transition">📅</button>}
-                                                {isAdmin && <button onClick={() => handleDeleteSlot(slot.id)} className="text-red-400 text-xs font-bold underline">מחק מועד</button>}
+                                                {isAdmin && <button onClick={() => handleDeleteSlot(slot.id)} className="text-red-500 bg-red-50 px-4 py-2 rounded-xl text-sm font-bold border border-red-100 hover:bg-red-100 transition">מחק שיעור</button>}
                                             </div>
                                         ))}
                                     </div>
@@ -567,42 +585,61 @@
                         )}
                     </main>
 
-                    {/* Bottom Navigation */}
-                    <nav className="bottom-nav">
-                        <button onClick={() => setActiveTab('guided')} className={`nav-item ${activeTab === 'guided' ? 'active' : ''}`}>
-                            <span className="nav-icon">🏺</span>
-                            <span>שיעורים</span>
-                        </button>
-                        <button onClick={() => setActiveTab('open')} className={`nav-item ${activeTab === 'open' ? 'active' : ''}`}>
-                            <span className="nav-icon">👐</span>
-                            <span>פתוח</span>
-                        </button>
-                        <button onClick={() => setActiveTab('community')} className={`nav-item ${activeTab === 'community' ? 'active' : ''}`}>
-                            <span className="nav-icon">🤝</span>
-                            <span>קהילה</span>
-                        </button>
-                        <button onClick={() => setActiveTab('history')} className={`nav-item ${activeTab === 'history' ? 'active' : ''}`}>
-                            <span className="nav-icon">📝</span>
-                            <span>היסטוריה</span>
-                        </button>
+                    {/* 🟢 תפריט תחתון חדש, מודגש ומותאם למחשב 🟢 */}
+                    <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md md:max-w-4xl bg-[#FAF7F2]/95 backdrop-blur-xl border-t border-[#C17B4A]/15 flex justify-around p-2 pb-[calc(10px+env(safe-area-inset-bottom))] z-50 rounded-t-3xl shadow-[0_-10px_40px_rgba(92,61,40,0.05)]">
+                        {['guided', 'open', 'community', 'history'].map(tab => {
+                            const labels = { guided: ['🏺', 'שיעורים'], open: ['👐', 'פתוח'], community: ['🤝', 'קהילה'], history: ['📝', 'היסטוריה'] };
+                            const isActive = activeTab === tab;
+                            return (
+                                <button key={tab} onClick={() => setActiveTab(tab)} className={`flex flex-col items-center gap-1 w-[22%] py-2 rounded-2xl transition-all duration-300 ${isActive ? 'bg-[#FFF9F0] text-[#C17B4A] shadow-sm scale-105 font-bold' : 'text-[#9B9185] font-semibold'}`}>
+                                    <span className="text-2xl">{labels[tab][0]}</span>
+                                    <span className="text-[11px] md:text-sm">{labels[tab][1]}</span>
+                                </button>
+                            )
+                        })}
                     </nav>
 
-                    {/* Modals */}
+                    {/* 🟢 מודאל עריכת עמדה משודרג למנהל 🟢 */}
                     {selectedWheelInfo && (
                         <div className="modal-overlay" onClick={() => setSelectedWheelInfo(null)}>
                             <div className="bg-[#FAF7F2] w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl text-center relative border border-white" onClick={e => e.stopPropagation()}>
                                 <h3 className="font-display text-[#5C3D28] text-3xl font-bold mb-2">עמדה {selectedWheelInfo.wId}</h3>
-                                {isAdmin && <p className="text-xs text-[#C17B4A] mb-4 font-bold tracking-widest uppercase">ניהול עמדה</p>}
+                                {isAdmin && <p className="text-xs text-[#C17B4A] mb-4 font-bold tracking-widest uppercase">עריכת שיבוץ - מנהל</p>}
                                 <p className="text-[#9B9185] mb-8 font-medium leading-relaxed bg-white p-4 rounded-2xl shadow-sm">
                                     {wheelDescriptions[selectedWheelInfo.wId.toString()] || 'אובניים חשמליים'}
                                 </p>
+                                
                                 <div className="space-y-4">
-                                    {(!selectedWheelInfo.slot.wheel_assignments?.[selectedWheelInfo.wId] || isAdmin) ? (
-                                        <button onClick={() => bookWheel(selectedWheelInfo.slot.id, selectedWheelInfo.wId)} className="w-full btn-primary">
-                                            {isAdmin ? (selectedWheelInfo.slot.wheel_assignments?.[selectedWheelInfo.wId] ? 'שינוי שיבוץ' : 'שיבוץ ידני') : 'אני רוצה את העמדה הזו'}
-                                        </button>
-                                    ) : <p className="font-bold py-3 text-[#5C3D28] bg-white rounded-xl">תפוס ע"י {selectedWheelInfo.slot.wheel_assignments[selectedWheelInfo.wId]}</p>}
-                                    <button onClick={() => setSelectedWheelInfo(null)} className="w-full text-[#9B9185] font-bold py-2 mt-2">חזרה</button>
+                                    {isAdmin ? (
+                                        <form onSubmit={(e) => { 
+                                            e.preventDefault(); 
+                                            const studentName = e.target.studentName.value;
+                                            const slot = selectedWheelInfo.slot;
+                                            const wId = selectedWheelInfo.wId;
+                                            const upd = { ...slot.wheel_assignments };
+                                            if (!studentName.trim()) delete upd[wId];
+                                            else upd[wId] = studentName.trim();
+                                            db.collection('open_studio').doc(slot.id).update({ wheel_assignments: upd });
+                                            setSelectedWheelInfo(null);
+                                        }}>
+                                            <input name="studentName" list="students-list" autoComplete="off" defaultValue={selectedWheelInfo.slot.wheel_assignments?.[selectedWheelInfo.wId] || ""} placeholder="בחר או הקלד שם תלמיד..." className="clay-input text-center mb-4 text-lg font-bold" autoFocus />
+                                            <div className="flex gap-3">
+                                                <button type="submit" className="flex-1 btn-primary py-3">שמור</button>
+                                                {selectedWheelInfo.slot.wheel_assignments?.[selectedWheelInfo.wId] && (
+                                                    <button type="button" onClick={() => handleCancel(selectedWheelInfo.slot, selectedWheelInfo.wId)} className="bg-red-50 text-red-500 font-bold px-6 rounded-xl border border-red-100 hover:bg-red-100 transition">הסר</button>
+                                                )}
+                                            </div>
+                                        </form>
+                                    ) : (
+                                        (!selectedWheelInfo.slot.wheel_assignments?.[selectedWheelInfo.wId]) ? (
+                                            <button onClick={() => bookWheel(selectedWheelInfo.slot.id, selectedWheelInfo.wId)} className="w-full btn-primary">
+                                                אני רוצה את העמדה הזו
+                                            </button>
+                                        ) : (
+                                            <p className="font-bold py-3 text-[#5C3D28] bg-white rounded-xl">תפוס ע"י {selectedWheelInfo.slot.wheel_assignments[selectedWheelInfo.wId]}</p>
+                                        )
+                                    )}
+                                    <button onClick={() => setSelectedWheelInfo(null)} className="w-full text-[#9B9185] font-bold py-2 mt-2">סגור חלון</button>
                                 </div>
                             </div>
                         </div>
