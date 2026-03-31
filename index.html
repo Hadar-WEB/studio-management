@@ -47,6 +47,7 @@
         };
 
         const App = () => {
+            const [authLoading, setAuthLoading] = useState(true); 
             const [session, setSession] = useState(null);
             const [profile, setProfile] = useState(null); 
             const [isAdmin, setIsAdmin] = useState(localStorage.getItem('is_admin') === 'true');
@@ -75,8 +76,15 @@
                     } else {
                         setProfile(null);
                         setSlots([]);
+                        setSwaps([]);
                     }
+                    setAuthLoading(false); 
                 });
+                return () => unsubscribeAuth();
+            }, []);
+
+            useEffect(() => {
+                if (!session && !isAdmin) return;
 
                 const unsubscribeSlots = db.collection('open_studio')
                     .orderBy('slot_date')
@@ -95,11 +103,10 @@
                 fetchData();
 
                 return () => {
-                    unsubscribeAuth();
                     unsubscribeSlots();
                     unsubscribeSwaps();
                 };
-            }, []);
+            }, [session, isAdmin]);
 
             useEffect(() => {
                 if (isAdmin) {
@@ -282,11 +289,19 @@
 
                 const slotDoc = await db.collection('open_studio').doc(swapItem.slot_id).get();
                 if (!slotDoc.exists) return alert("השיעור לא קיים");
-                if (slotDoc.data().wheel_assignments[swapItem.wheel_id] !== swapItem.original_student) {
+                
+                const currentAssignments = slotDoc.data().wheel_assignments || {};
+
+                // הגנה מפני כפילויות של תלמיד מחליף בשיעור
+                if (Object.values(currentAssignments).includes(profile.full_name)) {
+                    return alert("שגיאה: את/ה כבר רשום/ה לשיעור זה בעמדה אחרת, לא ניתן להירשם פעמיים.");
+                }
+
+                if (currentAssignments[swapItem.wheel_id] !== swapItem.original_student) {
                     alert("המקום השתנה."); await db.collection('swap_market').doc(swapItem.id).delete(); return;
                 }
 
-                const assignments = { ...slotDoc.data().wheel_assignments };
+                const assignments = { ...currentAssignments };
                 assignments[swapItem.wheel_id] = profile.full_name;
                 await db.collection('open_studio').doc(swapItem.slot_id).update({ wheel_assignments: assignments });
                 await db.collection('swap_market').doc(swapItem.id).delete();
@@ -341,6 +356,14 @@
                 });
                 return grouped;
             }, [slots, manualHours, isAdmin]);
+
+            if (authLoading) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center bg-[url('https://www.transparenttextures.com/patterns/cream-paper.png')] bg-[#FAF7F2]">
+                        <div className="w-16 h-16 border-4 border-[#FFF9F0] border-t-[#C17B4A] rounded-full animate-spin"></div>
+                    </div>
+                );
+            }
 
             if (!session && !isAdmin) {
                 return (
@@ -397,6 +420,18 @@
                 );
             }
 
+            // 🟢 פילטר חדש שמסתיר שיעורים שהסתיימו מהלוח הראשי 🟢
+            const currentSlots = slots.filter(slot => {
+                if (!slot.slot_date) return false;
+                let endTimeStr = "23:59";
+                if (slot.start_time) {
+                    const timeParts = slot.start_time.split('-');
+                    endTimeStr = timeParts.length > 1 ? timeParts[1].trim() : timeParts[0].trim();
+                }
+                const slotEndDate = new Date(`${slot.slot_date}T${endTimeStr}`);
+                return isNaN(slotEndDate.getTime()) || slotEndDate >= new Date();
+            });
+
             const historySlots = slots
                 .filter(s => isAdmin ? true : Object.values(s.wheel_assignments || {}).includes(profile?.full_name))
                 .sort((a, b) => {
@@ -404,6 +439,13 @@
                     const db = new Date(b.slot_date).getTime();
                     return (isNaN(db) ? 0 : db) - (isNaN(da) ? 0 : da);
                 });
+
+            const activeSwaps = swaps.filter(swap => {
+                if (!swap.slot_date || !swap.start_time) return false;
+                const startTime = swap.start_time.split('-')[0].trim();
+                const swapDate = new Date(`${swap.slot_date}T${startTime}`);
+                return isNaN(swapDate.getTime()) || swapDate > new Date(); 
+            });
 
             return (
                 <div className="max-w-md md:max-w-4xl mx-auto min-h-screen flex flex-col relative text-right bg-[url('https://www.transparenttextures.com/patterns/cream-paper.png')] pb-32">
@@ -444,9 +486,12 @@
                         )}
 
                         {(activeTab === 'guided' || activeTab === 'open') && (
-                            /* 🟢 רשת עמודות למחשב (2 עמודות) ולנייד (עמודה 1) 🟢 */
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                {slots.filter(s => s.lesson_type === activeTab).map(slot => {
+                                {/* 🟢 התראה אם אין שיעורים עתידיים להצגה 🟢 */}
+                                {currentSlots.filter(s => s.lesson_type === activeTab).length === 0 && (
+                                    <p className="text-center text-[#9B9185] py-10 font-semibold md:col-span-full">אין מועדים קרובים להצגה.</p>
+                                )}
+                                {currentSlots.filter(s => s.lesson_type === activeTab).map(slot => {
                                     const takenCount = Object.keys(slot.wheel_assignments || {}).length;
                                     const isFull = takenCount >= 5;
                                     const amIInWaitlist = session?.user?.id && waitlist.some(w => w.slot_id === slot.id && w.user_id === session.user.id);
@@ -509,8 +554,8 @@
 
                         {activeTab === 'community' && (
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {swaps.length === 0 && <p className="text-center text-[#9B9185] py-10 font-semibold md:col-span-full">אין הצעות להחלפה כרגע. הכל רגוע.</p>}
-                                {swaps.map(swap => (
+                                {activeSwaps.length === 0 && <p className="text-center text-[#9B9185] py-10 font-semibold md:col-span-full">אין הצעות להחלפה כרגע. הכל רגוע.</p>}
+                                {activeSwaps.map(swap => (
                                     <div key={swap.id} className="card-premium p-5 flex justify-between items-center border-r-4 border-[#C17B4A]">
                                         <div>
                                             <p className="font-display font-bold text-[#5C3D28] text-xl">{swap.original_student}</p>
@@ -567,25 +612,63 @@
                                 )}
 
                                 {(historyView === 'list' || !isAdmin) && (
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                         {historySlots.length === 0 && <p className="text-center text-[#9B9185] py-10 font-semibold md:col-span-full">אין שיעורים להצגה.</p>}
-                                        {historySlots.map(slot => (
-                                            <div key={slot.id} className="card-premium p-5 flex items-center justify-between">
-                                                <div>
-                                                    <p className="font-display font-bold text-[#5C3D28] text-xl">{safeFormatDate(slot.slot_date, {day:'numeric', month:'long'})}</p>
-                                                    <p className="text-sm text-[#9B9185] font-semibold">{slot.start_time} • {slot.lesson_type === 'guided' ? 'שיעור' : 'פתוח'}</p>
-                                                </div>
-                                                {!isAdmin && <button onClick={() => addToCalendar(slot.slot_date, slot.start_time)} className="w-12 h-12 bg-[#FAF7F2] rounded-full flex items-center justify-center text-xl hover:bg-[#FFF9F0] transition">📅</button>}
-                                                {isAdmin && <button onClick={() => handleDeleteSlot(slot.id)} className="text-red-500 bg-red-50 px-4 py-2 rounded-xl text-sm font-bold border border-red-100 hover:bg-red-100 transition">מחק שיעור</button>}
-                                            </div>
-                                        ))}
+                                        {historySlots.map(slot => {
+                                            if (isAdmin) {
+                                                return (
+                                                    <div key={slot.id} className="card-premium p-6 relative overflow-hidden flex flex-col justify-between opacity-80 hover:opacity-100 transition-opacity">
+                                                        <div className="flex justify-between items-start mb-6">
+                                                            <div>
+                                                                <h4 className="font-display text-xl font-bold text-[#5C3D28]">
+                                                                    {safeFormatDate(slot.slot_date, {weekday: 'long', day: 'numeric', month: 'short'})}
+                                                                </h4>
+                                                                <p className="text-[#C17B4A] font-semibold mt-1 flex items-center gap-2 text-sm">
+                                                                    <span>🕒</span> {slot.start_time || 'שעה לא ידועה'} • {slot.lesson_type === 'guided' ? 'שיעור' : 'פתוח'}
+                                                                </p>
+                                                            </div>
+                                                            <button onClick={() => handleDeleteSlot(slot.id)} className="text-red-500 bg-red-50 px-3 py-1 rounded-xl text-xs font-bold border border-red-100 hover:bg-red-100 transition">מחק שיעור</button>
+                                                        </div>
+
+                                                        <div className="flex justify-between items-end gap-2 relative z-10 mt-auto">
+                                                            {[1,2,3,4,5].map(wNum => {
+                                                                const occ = slot.wheel_assignments?.[wNum];
+                                                                let btnClass = occ ? "wheel-taken" : "wheel-free";
+                                                                let displayName = occ ? (typeof occ === 'string' ? occ.split(' ')[0] : 'תפוס') : 'פנוי';
+
+                                                                return (
+                                                                    <div key={wNum} className="flex flex-col items-center gap-2">
+                                                                        <button onClick={() => setSelectedWheelInfo({ slot, wId: wNum })} className={`wheel-btn ${btnClass}`}>
+                                                                            {wNum}
+                                                                        </button>
+                                                                        <span className="text-[10px] font-semibold text-[#9B9185] text-center w-12 truncate leading-tight">
+                                                                            {displayName}
+                                                                        </span>
+                                                                        {occ && <button onClick={() => handleCancel(slot, wNum)} className="text-[10px] text-[#C17B4A] font-bold mt-1 bg-[#FFF9F0] px-2 py-1 rounded-full">ביטול</button>}
+                                                                    </div>
+                                                                )
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            } else {
+                                                return (
+                                                    <div key={slot.id} className="card-premium p-5 flex items-center justify-between">
+                                                        <div>
+                                                            <p className="font-display font-bold text-[#5C3D28] text-xl">{safeFormatDate(slot.slot_date, {day:'numeric', month:'long'})}</p>
+                                                            <p className="text-sm text-[#9B9185] font-semibold">{slot.start_time} • {slot.lesson_type === 'guided' ? 'שיעור' : 'פתוח'}</p>
+                                                        </div>
+                                                        <button onClick={() => addToCalendar(slot.slot_date, slot.start_time)} className="w-12 h-12 bg-[#FAF7F2] rounded-full flex items-center justify-center text-xl hover:bg-[#FFF9F0] transition">📅</button>
+                                                    </div>
+                                                );
+                                            }
+                                        })}
                                     </div>
                                 )}
                             </div>
                         )}
                     </main>
 
-                    {/* 🟢 תפריט תחתון חדש, מודגש ומותאם למחשב 🟢 */}
                     <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md md:max-w-4xl bg-[#FAF7F2]/95 backdrop-blur-xl border-t border-[#C17B4A]/15 flex justify-around p-2 pb-[calc(10px+env(safe-area-inset-bottom))] z-50 rounded-t-3xl shadow-[0_-10px_40px_rgba(92,61,40,0.05)]">
                         {['guided', 'open', 'community', 'history'].map(tab => {
                             const labels = { guided: ['🏺', 'שיעורים'], open: ['👐', 'פתוח'], community: ['🤝', 'קהילה'], history: ['📝', 'היסטוריה'] };
@@ -599,7 +682,6 @@
                         })}
                     </nav>
 
-                    {/* 🟢 מודאל עריכת עמדה משודרג למנהל 🟢 */}
                     {selectedWheelInfo && (
                         <div className="modal-overlay" onClick={() => setSelectedWheelInfo(null)}>
                             <div className="bg-[#FAF7F2] w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl text-center relative border border-white" onClick={e => e.stopPropagation()}>
